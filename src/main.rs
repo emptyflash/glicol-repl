@@ -12,12 +12,25 @@ use cpal::{
 use glicol::Engine;
 
 fn main() -> Result<(), Box<dyn Error>> {
-    let host = cpal::default_host();
-    let device = host.default_output_device().expect("failed to find output device");
+    let host = cpal::available_hosts()
+            .into_iter()
+            .find(|id| *id == cpal::HostId::Jack)
+            .and_then(|a| cpal::host_from_id(a).ok())
+            .or(Some(cpal::default_host()))
+            .ok_or("Couldn't find audio host")?;
+    let device = host.default_output_device().ok_or("failed to find output device")?;
     println!("Output device: {}", device.name()?);
 
     let config = device.default_output_config().unwrap();
     println!("Default output config: {:?}", config);
+
+    /* ALSA setup
+    // We have to use one channel or else we hit https://github.com/RustAudio/cpal/issues/479
+    let config = device.supported_output_configs()?.find(|c| {
+        c.channels() == 1 && c.sample_format() == cpal::SampleFormat::F32 
+    }).ok_or("couldn't find supported config")?.with_sample_rate(cpal::SampleRate(44100));
+    println!("Output config: {:?}", config);
+    */
 
     match config.sample_format() {
         cpal::SampleFormat::I8 => run::<i8>(&device, &config.into()),
@@ -42,19 +55,29 @@ pub fn run<T>(device: &cpal::Device, config: &cpal::StreamConfig) -> Result<(), 
 where
     T: SizedSample + FromSample<f32>,
 {
-    let sample_rate = config.sample_rate.0 as usize;
+    let sample_rate = config.sample_rate.0 as f32;
     let channels = config.channels as usize;
 
     let mut engine = Engine::<1>::new();
     engine.set_sr(sample_rate);
     engine.set_bpm(120.0);
-    engine.update_with_code("~t: sin 439\no: sin 440 >> add ~t");
+    engine.update_with_code("~t: sin 439\no: sin 440 >> add ~t >> mul 0.1");
 
-
+    let mut block_pos = 0;
+    let (mut block, _err_msg) = engine.next_block(vec![]);
     let mut next_value = move || {
-        let (block, _err_msg) = engine.next_block(vec![]);
+        block = engine.next_block(vec![]).0;
         block[0][0]
     };
+
+    /* Sin test
+    // Produce a sinusoid of maximum amplitude.
+    let mut sample_clock = 0f32;
+    let mut next_value = move || {
+        sample_clock = (sample_clock + 1.0) % sample_rate;
+        (sample_clock * 440.0 * 2.0 * std::f32::consts::PI / sample_rate).sin()
+    };
+    */
 
     let err_fn = |err| eprintln!("an error occurred on stream: {}", err);
     fn write_data<T : Sample + FromSample<f32>>(output: &mut [T], channels: usize, next_sample: &mut dyn FnMut() -> f32)

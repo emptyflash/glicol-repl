@@ -1,9 +1,0 @@
-[target.arm-unknown-linux-gnueabihf]
-linker = "arm-linux-gnueabihf-gcc"
-rustflags = [
-  "-L",
-  "/usr/lib/arm-linux-gnueabihf",
-  "-L",
-  "/usr/arm-linux-gnueabihf/lib",
-  "-C", "link-arg=-no-pie",
-]
