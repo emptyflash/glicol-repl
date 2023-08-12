@@ -15,16 +15,13 @@ use std::sync::{Mutex, Arc};
 const BLOCK_SIZE: usize = 128;
 
 fn main() -> Result<(), Box<dyn Error>> {
-    let host = cpal::default_host();
-    /* handle jack
-    let host = cpal::available_hosts()
+    let device = cpal::available_hosts()
             .into_iter()
             .find(|id| *id == cpal::HostId::Jack)
             .and_then(|a| cpal::host_from_id(a).ok())
-            .or(Some(cpal::default_host()))
-            .ok_or("Couldn't find audio host")?;
-    */
-    let device = host.default_output_device().ok_or("failed to find output device")?;
+            .and_then(|host| host.default_output_device())
+            .or(cpal::default_host().default_output_device())
+            .expect("unable to create output device");
     println!("Output device: {}", device.name()?);
 
     let config = device.default_output_config().unwrap();
@@ -67,9 +64,15 @@ where
     let engine_mutex = Arc::new(Mutex::from(Engine::<BLOCK_SIZE>::new()));
     let engine_mutex_inner = Arc::clone(&engine_mutex);
     let mut engine = engine_mutex.lock().unwrap();
+
     engine.set_sr(sample_rate);
     engine.set_bpm(120.0);
-    engine.update_with_code("~t: sin 439\no: sin 440 >> add ~t >> mul 0.1");
+    engine.update_with_code("o: sin 440 >> mul 0.1");
+
+    let mut block: [glicol_synth::Buffer::<BLOCK_SIZE>; 2] = [glicol_synth::Buffer::SILENT; 2];
+    block.clone_from_slice(engine.next_block(vec![]).0);
+    let mut block_pos = 0;
+
     drop(engine);
 
     /* Sin test
@@ -86,8 +89,6 @@ where
         config,
         move |data: &mut [T], _: &cpal::OutputCallbackInfo| {
             let mut engine_inner = engine_mutex_inner.lock().unwrap();
-            let mut block_pos = 0;
-            let mut block = engine_inner.next_block(vec![]).0;
             for frame in data.chunks_mut(channels) {
                 let mut channel = 0;
                 for sample in frame.iter_mut() {
@@ -98,7 +99,7 @@ where
                 }
                 block_pos += 1;
                 if block_pos >= BLOCK_SIZE {
-                    block = engine_inner.next_block(vec![]).0;
+                    block.clone_from_slice(engine_inner.next_block(vec![]).0);
                     block_pos = 0;
                 }
             }
