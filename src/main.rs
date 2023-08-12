@@ -123,7 +123,7 @@ where
         let modified_time = fs::metadata(&code_path)?.modified()?;
         if modified_time != last_modified_time {
             last_modified_time = modified_time;
-            code = fs::read_to_string(code_path)?;
+            code = fs::read_to_string(code_path).unwrap();
             let mut engine = engine_mutex.lock().unwrap();
             engine.update_with_code(&code);
             match engine.update() {
