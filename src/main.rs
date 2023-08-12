@@ -10,14 +10,20 @@ use cpal::{
     FromSample, Sample, SizedSample,
 };
 use glicol::Engine;
+use std::sync::{Mutex, Arc};
+
+const BLOCK_SIZE: usize = 128;
 
 fn main() -> Result<(), Box<dyn Error>> {
+    let host = cpal::default_host();
+    /* handle jack
     let host = cpal::available_hosts()
             .into_iter()
             .find(|id| *id == cpal::HostId::Jack)
             .and_then(|a| cpal::host_from_id(a).ok())
             .or(Some(cpal::default_host()))
             .ok_or("Couldn't find audio host")?;
+    */
     let device = host.default_output_device().ok_or("failed to find output device")?;
     println!("Output device: {}", device.name()?);
 
@@ -55,20 +61,16 @@ pub fn run<T>(device: &cpal::Device, config: &cpal::StreamConfig) -> Result<(), 
 where
     T: SizedSample + FromSample<f32>,
 {
-    let sample_rate = config.sample_rate.0 as f32;
+    let sample_rate = config.sample_rate.0 as usize;
     let channels = config.channels as usize;
 
-    let mut engine = Engine::<1>::new();
+    let engine_mutex = Arc::new(Mutex::from(Engine::<BLOCK_SIZE>::new()));
+    let engine_mutex_inner = Arc::clone(&engine_mutex);
+    let mut engine = engine_mutex.lock().unwrap();
     engine.set_sr(sample_rate);
     engine.set_bpm(120.0);
     engine.update_with_code("~t: sin 439\no: sin 440 >> add ~t >> mul 0.1");
-
-    let mut block_pos = 0;
-    let (mut block, _err_msg) = engine.next_block(vec![]);
-    let mut next_value = move || {
-        block = engine.next_block(vec![]).0;
-        block[0][0]
-    };
+    drop(engine);
 
     /* Sin test
     // Produce a sinusoid of maximum amplitude.
@@ -80,20 +82,26 @@ where
     */
 
     let err_fn = |err| eprintln!("an error occurred on stream: {}", err);
-    fn write_data<T : Sample + FromSample<f32>>(output: &mut [T], channels: usize, next_sample: &mut dyn FnMut() -> f32)
-    {
-        for frame in output.chunks_mut(channels) {
-            let value: T = T::from_sample(next_sample());
-            for sample in frame.iter_mut() {
-                *sample = value;
-            }
-        }
-    }
-
     let stream = device.build_output_stream(
         config,
         move |data: &mut [T], _: &cpal::OutputCallbackInfo| {
-            write_data(data, channels, &mut next_value)
+            let mut engine_inner = engine_mutex_inner.lock().unwrap();
+            let mut block_pos = 0;
+            let mut block = engine_inner.next_block(vec![]).0;
+            for frame in data.chunks_mut(channels) {
+                let mut channel = 0;
+                for sample in frame.iter_mut() {
+                    let block_val = block[channel][block_pos];
+                    let value: T = T::from_sample(block_val);
+                    *sample = value;
+                    channel += 1;
+                }
+                block_pos += 1;
+                if block_pos >= BLOCK_SIZE {
+                    block = engine_inner.next_block(vec![]).0;
+                    block_pos = 0;
+                }
+            }
         },
         err_fn,
         None,
