@@ -7,10 +7,11 @@ use std::error::Error;
 use std::time::Duration;
 use cpal::{
     traits::{DeviceTrait, HostTrait, StreamTrait},
-    FromSample, Sample, SizedSample,
+    FromSample, SizedSample,
 };
 use glicol::Engine;
 use std::sync::{Mutex, Arc};
+use std::fs;
 
 const BLOCK_SIZE: usize = 128;
 
@@ -65,9 +66,17 @@ where
     let engine_mutex_inner = Arc::clone(&engine_mutex);
     let mut engine = engine_mutex.lock().unwrap();
 
+    let code_path = "livecode.glicol";
+    let mut last_modified_time = fs::metadata(&code_path)?.modified()?;
+    let mut code = fs::read_to_string(code_path)?;
+
     engine.set_sr(sample_rate);
     engine.set_bpm(120.0);
-    engine.update_with_code("o: sin 440 >> mul 0.1");
+    engine.update_with_code(&code);
+    match engine.update() {
+        Err(e) => eprintln!("Code error: {:?}", e),
+        _ => (),
+    };
 
     let mut block: [glicol_synth::Buffer::<BLOCK_SIZE>; 2] = [glicol_synth::Buffer::SILENT; 2];
     block.clone_from_slice(engine.next_block(vec![]).0);
@@ -111,6 +120,17 @@ where
 
     loop {
         std::thread::sleep(Duration::from_millis(8));
+        let modified_time = fs::metadata(&code_path)?.modified()?;
+        if modified_time != last_modified_time {
+            last_modified_time = modified_time;
+            code = fs::read_to_string(code_path)?;
+            let mut engine = engine_mutex.lock().unwrap();
+            engine.update_with_code(&code);
+            match engine.update() {
+                Err(e) => eprintln!("Code error: {:?}", e),
+                _ => (),
+            };
+        }
     }
 }
 
